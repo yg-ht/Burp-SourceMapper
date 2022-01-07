@@ -5,9 +5,11 @@ It has become common place for JavaScript and CSS files to be "minified" in orde
 
 ![Minified JS code](assets/minifiedcode.png)
 
-When a source map has been applied you get extra visibility in the folm of extra resources appearing in the file-tree within the browser's developer console:
+When a source map has been applied you get extra visibility in the form of extra resources appearing in the file-tree within the browser's developer console:
 
 ![Source Map applied](assets/mappedcode.png)
+
+And these resources can be read and understood like the original code.
 
 ## Why is this extension needed and what does it do?
 Depending on the security stance of the system, it is commonly thought that publicly including source maps is a vulnerability in its own right.  Rightly, or wrongly, this means source maps are not usually available publicly, but, as a consultant the customer is likely willing to give you a copy of those source maps if you ask.  To use the source maps you can do offline decompilation, but, this then disconnects the browser's consumption of the minified JavaScript with the decompiled and human-readable code.  Ideally, this means you want the source maps to also be consumed by the browser and then you get the smoothest experience.  
