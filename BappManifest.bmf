@@ -1,0 +1,13 @@
+Uuid: d8148953358b44f4861688410e642a6f
+ExtensionType: 2
+Name: Source Mapper
+RepoName: source-mapper
+ScreenVersion: 1.0
+SerialVersion: 1
+MinPlatformVersion: 0
+ProOnly: False
+Author: Felix Ryan
+ShortDescription: Inject offline source maps for easier JavaScript debugging.
+EntryPoint: SourceMapper.py
+BuildCommand: 
+SupportedProducts: Pro, Community
