@@ -112,9 +112,17 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
             isMapResource = False
             resourceIsJS = False
             mapIsJS = False
+
+            # pull the headers fairly early so that we can check for MIME types as well as file extensions to identify
+            # source mappable content
+            resInfo = self._helpers.analyzeResponse(message.getResponse())
+            resHeaderBytes = message.getResponse()[:resInfo.getBodyOffset()]
+            resHeaderStr = self._helpers.bytesToString(resHeaderBytes)
+
             # at the moment the only routines in place are for JS files, but the following is there for future dev
             resourceIsCSS = False
-            if re.search("\.js$", reqResource):
+            if re.search("\.js$", reqResource) or re.search('Content-Type: text/javascript', resHeaderStr,
+                                                            flags=re.IGNORECASE):
                 isTargetResource = True
                 resourceIsJS = True
             if re.search("\.css$", reqResource):
@@ -125,9 +133,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 mapIsJS = True
 
             if isTargetResource or isMapResource:
-                resInfo = self._helpers.analyzeResponse(message.getResponse())
-                resHeaderBytes = message.getResponse()[:resInfo.getBodyOffset()]
-                resHeaderStr = self._helpers.bytesToString(resHeaderBytes)
                 resBodyBytes = message.getResponse()[resInfo.getBodyOffset():]
                 resBodyStr = self._helpers.bytesToString(resBodyBytes)
                 self.debug("Res body: " + str(resBodyStr[:40]), 3)
@@ -138,7 +143,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                     if resourceIsJS:
                         if re.search('X-SourceMap:', resHeaderStr):
                             sourceMapDirectiveFound = True
-                        if re.search('^//# sourceMappingURL=', resBodyStr):
+                        if re.search('//# sourceMappingURL=', resBodyStr):
                             sourceMapDirectiveFound = True
                         if sourceMapDirectiveFound:
                             self.debug('Source map directive found, no need for intervention', 2)
@@ -149,9 +154,36 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                         newResBodyBytes = JSsourcemapDirectiveBytes + resBodyBytes
                         newResBodyStr = self._helpers.bytesToString(newResBodyBytes)
                         self.debug("New Res body: " + str(newResBodyStr[:40]), 2)
-
-                        # insert the custom source map directive into the body bytes
-                        message.setResponse(resHeaderBytes+newResBodyBytes)
+                        # Update the Content-Length headers, if needed
+                        if re.search('Content-Length: ', resHeaderStr, re.IGNORECASE):
+                            self.debug('Content-Length header needs update, sending new body with updated headers', 2)
+                            # calculate the length of the body following the additional content being injected
+                            # we don't want to blat the original value with a newly calculated value because
+                            # we want to retain any original application behaviour
+                            JSsourceMapDirectiveLen = len(JSsourcemapDirectiveStr)
+                            self.debug('Full headers from request are:\n{}'.format(resHeaderStr), 3)
+                            originalContentLengthHeader = re.findall(r'^Content-Length: (?:[0-9]+)', resHeaderStr,
+                                                                     flags=re.IGNORECASE | re.MULTILINE)
+                            self.debug('Content length header is: {}'.format(originalContentLengthHeader))
+                            if len(originalContentLengthHeader) > 1:
+                                self.debug('Multiple Content-Length headers found, only updated the first', 2)
+                            self.debug('The whole rsplit identifying the header: {}'.
+                                       format(originalContentLengthHeader[0].rsplit(' ')))
+                            originalContentLengthHeaderKey = originalContentLengthHeader[0].rsplit(' ', 1)[0] + ' '
+                            originalContentLengthHeaderValue = int(originalContentLengthHeader[0].split(' ')[-1])
+                            newContentLengthHeaderValue = originalContentLengthHeaderValue + JSsourceMapDirectiveLen
+                            self.debug('Original content length header is: {}'.format(originalContentLengthHeader[0]), 2)
+                            self.debug('Injected header is {} bytes.  New Content-Length header should be {} bytes'.
+                                       format(JSsourceMapDirectiveLen, newContentLengthHeaderValue), 2)
+                            newResHeaderStr = re.sub(r'^Content-Length: (?:[0-9]+)', originalContentLengthHeaderKey +
+                                                     str(newContentLengthHeaderValue), resHeaderStr, count=1,
+                                                     flags=re.IGNORECASE | re.MULTILINE)
+                            newResHeaderBytes = array(bytearray(newResHeaderStr.encode('utf-8')), 'b')
+                            message.setResponse(newResHeaderBytes + newResBodyBytes)
+                        else:
+                            self.debug('No Content-Length header to update, sending new body with original headers', 2)
+                            # insert the custom source map directive into the body bytes
+                            message.setResponse(resHeaderBytes+newResBodyBytes)
 
                 if isMapResource:
                     self.debug('Map resource requested: ' + reqResource, 2)
