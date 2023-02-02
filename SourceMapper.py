@@ -161,7 +161,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                     #if header & body checkboxes both selected, inject into header
                     if self.header.isSelected():
                         #insert source map directive into header
-                        sourcemapHeader = "\r\nX-SourceMap: " + reqResource + '.map\r\n'
+                        sourcemapHeader = "\r\nX-SourceMap: " + reqResource + '.map\r\n\r\n'
                         resHeaderStr = resHeaderStr.strip()
                         newResHeaderStr = resHeaderStr + sourcemapHeader
                         newResHeaderBytes = array(bytearray(newResHeaderStr.encode('utf-8')), 'b')
