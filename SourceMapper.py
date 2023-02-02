@@ -31,7 +31,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         self.body = self.defineCheckBox("Sourcemap directive to body", False)
         self.body.setToolTipText("Check to inject sourcemap to body")
 
-        self.debugLevel = JTextField(str(1),header 1)
+        self.debugLevel = JTextField(str(1), 1)
         self.debugLevelLabel = JLabel("Debug level (0-3)")
         self.debugLevel.setToolTipText("Values 0-3, bigger number is more debug output, 0 is zero debug output")
         self.debugLevelGroup = JPanel()
