@@ -13,7 +13,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
 
     def debug(self, message, lvl=1):
         if int(self.debugLevel.text) >= lvl:
-            print message
+            print(message)
         return
 
 
@@ -25,6 +25,11 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         # define all the options for the config tab
         self.onlyInScope = self.defineCheckBox("Only in scope resources", True)
         self.onlyInScope.setToolTipText("Check to only work within the defined scope")
+        #automatically set the program to inject into header but leave the alternative body comment method disabled
+        self.header = self.defineCheckBox("Sourcemap directive to header", True)
+        self.header.setToolTipText("Check to inject sourcemap to header")
+        self.body = self.defineCheckBox("Sourcemap directive to body", False)
+        self.body.setToolTipText("Check to inject sourcemap to body")
 
         self.debugLevel = JTextField(str(1), 1)
         self.debugLevelLabel = JLabel("Debug level (0-3)")
@@ -54,6 +59,8 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 .addComponent(self.onlyInScope, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE)
                 .addComponent(self.mapInjectionFilesPathGroup, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE)
                 .addComponent(self.debugLevelGroup, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE)
+                .addComponent(self.header, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE)
+                .addComponent(self.body, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE)
                       )
         )
         layout.setVerticalGroup(
@@ -61,6 +68,8 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
             .addComponent(self.onlyInScope, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE)
             .addComponent(self.mapInjectionFilesPathGroup, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE)
             .addComponent(self.debugLevelGroup, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE)
+            .addComponent(self.header, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE)
+            .addComponent(self.body, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE, GroupLayout.PREFERRED_SIZE)
         )
 
 
@@ -97,6 +106,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         httpService = message.getHttpService()
         request = self._helpers.analyzeRequest(httpService, message.getRequest())
         reqURL = request.getUrl()
+    
 
         # check if the requested resource is within permitted scope
         if self.onlyInScope.isSelected() and not self._callbacks.isInScope(reqURL):
@@ -111,7 +121,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
             isTargetResource = False
             isMapResource = False
             resourceIsJS = False
-            mapIsJS = False
+            resourceIsCSS = False
 
             # pull the headers fairly early so that we can check for MIME types as well as file extensions to identify
             # source mappable content
@@ -119,8 +129,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
             resHeaderBytes = message.getResponse()[:resInfo.getBodyOffset()]
             resHeaderStr = self._helpers.bytesToString(resHeaderBytes)
 
-            # at the moment the only routines in place are for JS files, but the following is there for future dev
-            resourceIsCSS = False
+            #check type of resource
             if re.search("\.js$", reqResource) or re.search('Content-Type: text/javascript', resHeaderStr,
                                                             flags=re.IGNORECASE):
                 isTargetResource = True
@@ -130,110 +139,136 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 resourceIsCSS = True
             if re.search("\.map$", reqResource):
                 isMapResource = True
-                mapIsJS = True
 
             if isTargetResource or isMapResource:
                 resBodyBytes = message.getResponse()[resInfo.getBodyOffset():]
                 resBodyStr = self._helpers.bytesToString(resBodyBytes)
                 self.debug("Res body: " + str(resBodyStr[:40]), 3)
+    
+                #find map directive
+                sourceMapDirectiveFound = False
+                if resourceIsJS or resourceIsCSS:
+                    if re.search('X-SourceMap:', resHeaderStr):
+                        sourceMapDirectiveFound = True
+                    if re.search('//# sourceMappingURL=', resBodyStr):
+                        sourceMapDirectiveFound = True
+                    if sourceMapDirectiveFound:
+                        self.debug('Source map directive found, no need for intervention', 2)
+                        return
+                    
+                    #check whether either the header checkbox is selected or whether SRI is used
+                    #if so inject sourcemap into header
+                    #if header & body checkboxes both selected, inject into header
+                    if self.header.isSelected():
+                        #insert source map directive into header
+                        sourcemapHeader = "\r\nX-SourceMap: " + reqResource + '.map\r\n\r\n'
+                        resHeaderStr = resHeaderStr.strip()
+                        newResHeaderStr = resHeaderStr + sourcemapHeader
+                        newResHeaderBytes = array(bytearray(newResHeaderStr.encode('utf-8')), 'b')
+                        message.setResponse(newResHeaderBytes + resBodyBytes)
+                        self.debug('Sourcemap directive injected into header')
+                        self.debug("New Res header: " + str(newResHeaderStr.strip()), 2)
+                        
 
-                if isTargetResource:
-                    self.debug('Target resource found: ' + reqResource, 3)
-                    sourceMapDirectiveFound = False
-                    if resourceIsJS:
-                        if re.search('X-SourceMap:', resHeaderStr):
-                            sourceMapDirectiveFound = True
-                        if re.search('//# sourceMappingURL=', resBodyStr):
-                            sourceMapDirectiveFound = True
-                        if sourceMapDirectiveFound:
-                            self.debug('Source map directive found, no need for intervention', 2)
-                            return
-                        # build injected source map directive
-                        JSsourcemapDirectiveStr = '//# sourceMappingURL=' + reqResource + '.map' + '\n'
-                        JSsourcemapDirectiveBytes = array(bytearray(JSsourcemapDirectiveStr.encode('utf-8')), 'b')
-                        newResBodyBytes = JSsourcemapDirectiveBytes + resBodyBytes
+                    #if SRI not used and header checkbox not selected, check whether body checkbox is selected
+                    #if so inject sourcemap into body
+                    elif self.body.isSelected():
+                        sourcemapDirectiveStr = '//# sourceMappingURL=' + reqResource + '.map' + '\n'
+                        sourcemapDirectiveBytes = array(bytearray(sourcemapDirectiveStr.encode('utf-8')), 'b')
+                        newResBodyBytes = sourcemapDirectiveBytes + resBodyBytes
                         newResBodyStr = self._helpers.bytesToString(newResBodyBytes)
+                        sourceMapDirectiveLen = len(sourcemapDirectiveStr)
                         self.debug("New Res body: " + str(newResBodyStr[:40]), 2)
+
+                        # body has been changed so Content-Length headers probably need changing
                         # Update the Content-Length headers, if needed
                         if re.search('Content-Length: ', resHeaderStr, re.IGNORECASE):
                             self.debug('Content-Length header needs update, sending new body with updated headers', 2)
-                            # calculate the length of the body following the additional content being injected
-                            # we don't want to blat the original value with a newly calculated value because
-                            # we want to retain any original application behaviour
-                            JSsourceMapDirectiveLen = len(JSsourcemapDirectiveStr)
+
                             self.debug('Full headers from request are:\n{}'.format(resHeaderStr), 3)
                             originalContentLengthHeader = re.findall(r'^Content-Length: (?:[0-9]+)', resHeaderStr,
-                                                                     flags=re.IGNORECASE | re.MULTILINE)
+                                                                    flags=re.IGNORECASE | re.MULTILINE)
                             self.debug('Content length header is: {}'.format(originalContentLengthHeader))
                             if len(originalContentLengthHeader) > 1:
                                 self.debug('Multiple Content-Length headers found, only updated the first', 2)
                             self.debug('The whole rsplit identifying the header: {}'.
-                                       format(originalContentLengthHeader[0].rsplit(' ')))
+                                    format(originalContentLengthHeader[0].rsplit(' ')))
+                            # calculate the length of the body following the additional content being injected
+                            # we don't want to blat the original value with a newly calculated value because
+                            # we want to retain any original application behaviour
                             originalContentLengthHeaderKey = originalContentLengthHeader[0].rsplit(' ', 1)[0] + ' '
                             originalContentLengthHeaderValue = int(originalContentLengthHeader[0].split(' ')[-1])
-                            newContentLengthHeaderValue = originalContentLengthHeaderValue + JSsourceMapDirectiveLen
+                            newContentLengthHeaderValue = originalContentLengthHeaderValue + sourceMapDirectiveLen
                             self.debug('Original content length header is: {}'.format(originalContentLengthHeader[0]), 2)
                             self.debug('Injected header is {} bytes.  New Content-Length header should be {} bytes'.
-                                       format(JSsourceMapDirectiveLen, newContentLengthHeaderValue), 2)
+                                    format(sourceMapDirectiveLen, newContentLengthHeaderValue), 2)
                             newResHeaderStr = re.sub(r'^Content-Length: (?:[0-9]+)', originalContentLengthHeaderKey +
-                                                     str(newContentLengthHeaderValue), resHeaderStr, count=1,
-                                                     flags=re.IGNORECASE | re.MULTILINE)
-                            newResHeaderBytes = array(bytearray(newResHeaderStr.encode('utf-8')), 'b')
+                                                    str(newContentLengthHeaderValue), resHeaderStr, count=1,
+                                                    flags=re.IGNORECASE | re.MULTILINE)
+                            newResHeaderBytes = array(bytearray(newResHeaderStr.encode('utf-8')), 'b') 
+                            
                             message.setResponse(newResHeaderBytes + newResBodyBytes)
+                            self.debug('Sourcemap directive injected into body')
+
+                        #if Content-Length headers don't need changing, inject with original headers
                         else:
                             self.debug('No Content-Length header to update, sending new body with original headers', 2)
-                            # insert the custom source map directive into the body bytes
-                            message.setResponse(resHeaderBytes+newResBodyBytes)
+                            message.setResponse(resHeaderBytes + newResBodyBytes)
+                            self.debug('Sourcemap directive injected into body')
+                    
+                    #if neither checkbox is selected, prompt user to specify
+                    else:
+                        self.debug("Specify where to inject sourcemap")
 
+                # eventually the browser will request a map file, either because it was going to anyway or because we
+                # injected the directive, we must handle it
                 if isMapResource:
                     self.debug('Map resource requested: ' + reqResource, 2)
-                    validMapFound = False
-                    if mapIsJS:
-                        if re.search('^var map = {"version"', resBodyStr):
-                            validMapFound = True
-                        if not validMapFound:
-                            self.debug('Requested map file not valid', 2)
-                            resourceFileName = str(reqResource).split('/')[-1]
-                            injectableMapFile = self.mapInjectionFilesPath.text + resourceFileName
-                            if exists(injectableMapFile):
-                                self.debug('Injectable map file found at: ' + injectableMapFile, 1)
-                                # load the file
-                                injectableMapFileHandle = open(injectableMapFile, 'r')
-                                injectableMapFileStr = injectableMapFileHandle.read()
+                    # check the map being downloaded looks syntactically valid before attempting to inject ours
+                    if re.search('^var map = {"version"', resBodyStr):
+                        self.debug('Map file start is valid, skipping', 2)
+                    else:
+                        self.debug('Requested map file not valid, attempting to inject', 2)
+                        resourceFileName = str(reqResource).split('/')[-1]
+                        injectableMapFile = self.mapInjectionFilesPath.text + resourceFileName
+                        if exists(injectableMapFile):
+                            self.debug('Injectable map file found at: ' + injectableMapFile, 1)
+                            # load the file
+                            injectableMapFileHandle = open(injectableMapFile, 'r')
+                            injectableMapFileStr = injectableMapFileHandle.read()
 
-                                # identify what encoding it is using if it isn't something "normal"
-                                injectableMapFileStrEncoding = self.detectStringEncoding(injectableMapFileStr)
-                                self.debug('Source map for injection is ' + str(injectableMapFileStrEncoding) + ' encoded', 3)
+                            # identify what encoding it is using if it isn't something "normal"
+                            injectableMapFileStrEncoding = self.detectStringEncoding(injectableMapFileStr)
+                            self.debug('Source map for injection is ' + str(injectableMapFileStrEncoding) + ' encoded', 3)
 
-                                # flatten any undesirable characters, such "left double quotes" that just screw up the bytearray conversion
-                                injectableMapFileBytes_step0 = unicodedata.normalize('NFKD', injectableMapFileStr).encode('ascii', 'ignore')
+                            # flatten any undesirable characters, such "left double quotes" that just screw up the bytearray conversion
+                            injectableMapFileBytes_step0 = unicodedata.normalize('NFKD', injectableMapFileStr).encode('ascii', 'ignore')
 
-                                # finally, make sure everything is in utf-8 (as this is what the spec says it should be), probably a bit mute by this point though
-                                # in any case it needs to be converted to a Python bytearray, ready to be converted into a Java array
-                                if injectableMapFileStrEncoding:
-                                    injectableMapFileBytes_step1 = bytearray(injectableMapFileBytes_step0.decode(injectableMapFileStrEncoding).encode('utf-8'))
-                                else:
-                                    self.debug('!!!Unknown charset encountered - may not be able to inject source map!!!', 0)
-                                    injectableMapFileBytes_step1 = bytearray(injectableMapFileBytes_step0.encode('utf-8'))
-
-                                # convert into a Java array (the joys of working in Jython I suppose)
-                                injectableMapFileBytes_step2 = array(injectableMapFileBytes_step1, 'b')
-
-                                # ensure that the content type is specified correctly (may not matter but good to be sure)
-                                newResHeaderStr = resHeaderStr.replace('Content-Type: text/html', 'Content-Type: application/javascript; charset=utf-8')
-                                self.debug('Inserted Content-Type header', 2)
-
-                                # convert the new header string back into a bytearray and then into a Java array
-                                newResHeaderBytes = array(bytearray(newResHeaderStr.encode('utf-8')), 'b')
-
-                                # inject the local response!  Phew...
-                                message.setResponse(newResHeaderBytes + injectableMapFileBytes_step2)
-                                self.debug('!!!Offline source map file injected!!!', 1)
+                            # finally, make sure everything is in utf-8 (as this is what the spec says it should be), probably a bit mute by this point though
+                            # in any case it needs to be converted to a Python bytearray, ready to be converted into a Java array
+                            if injectableMapFileStrEncoding:
+                                injectableMapFileBytes_step1 = bytearray(injectableMapFileBytes_step0.decode(injectableMapFileStrEncoding).encode('utf-8'))
                             else:
-                                self.debug('No injectable map file found (' + injectableMapFile + ' attempted)', 2)
+                                self.debug('!!!Unknown charset encountered - may not be able to inject source map!!!', 0)
+                                injectableMapFileBytes_step1 = bytearray(injectableMapFileBytes_step0.encode('utf-8'))
 
-            else:
-                self.debug('Request is not for a target resource or map', 3)
+                            # convert into a Java array (the joys of working in Jython I suppose)
+                            injectableMapFileBytes_step2 = array(injectableMapFileBytes_step1, 'b')
+
+                            # ensure that the content type is specified correctly (may not matter but good to be sure)
+                            newResHeaderStr = resHeaderStr.replace('Content-Type: text/html', 'Content-Type: application/javascript; charset=utf-8')
+                            self.debug('Inserted Content-Type header', 2)
+
+                            # inject the local response!  Phew...
+                            # convert the new header string back into a bytearray and then into a Java array
+                            newResHeaderBytes = array(bytearray(newResHeaderStr.encode('utf-8')), 'b')
+                            message.setResponse(newResHeaderBytes + injectableMapFileBytes_step2)
+                            self.debug('!!!Offline source map file injected!!!', 1)
+                        else:
+                            self.debug('No injectable map file found (' + injectableMapFile + ' attempted)', 2)
+
+                else:
+                    self.debug('Request is not for a target resource or it\'s a map', 3)
 
         # end of function - return!
         return
