@@ -201,7 +201,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
             if isTargetResource or isMapResource:
                 resBodyBytes = message.getResponse()[resInfo.getBodyOffset():]
                 resBodyStr = self._helpers.bytesToString(resBodyBytes)
-                self.debug('Res body: ' + resBodyStr[:40], 3)
+                self.debug("Res body: " + resBodyStr[:40], 3)
 
                 #find source map directive and file
                 mapFileFound = False
