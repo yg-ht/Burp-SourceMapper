@@ -310,10 +310,8 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                     # check the map being downloaded looks syntactically valid before attempting to inject ours
                     if re.search('^var map = {"version"', resBodyStr):
                         self.debug('Map file start is valid, skipping', 2)
-    
-                        #alert that a sourcemap has been found
+                        #alert that a sourcemap has been found for later issue reporting in the UI
                         mapFileFound = True
-
                     else:
                         self.debug('Requested map file not valid, attempting to inject', 2)
                         resourceFileName = str(reqResource).split('/')[-1]
@@ -351,10 +349,8 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                             newResHeaderBytes = array(bytearray(newResHeaderStr.encode('utf-8')), 'b')
                             message.setResponse(newResHeaderBytes + injectableMapFileBytes_step2)
                             self.debug('!!!Offline source map file injected!!!', 1)
-
                             #alert that a source map has been found
                             mapFileFound = True
-
                         else:
                             mapFileFound = False
                             self.debug('No injectable map file found (' + injectableMapFile + ' attempted)', 1)
@@ -383,8 +379,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                         #add issue
                         self._callbacks.addScanIssue(sourcemapIssue)
                         self.debug('Burp issue raised - source map found', 1)
-
-
                 else:
                     self.debug('Request is not for a target resource or it\'s a map', 3)
 
