@@ -1,16 +1,18 @@
 from burp import IBurpExtender
+from burp import IBurpExtenderCallbacks
 from burp import IHttpListener
 from burp import ITab
-from burp import IScanIssue
+from burp import IScanIssue, IScannerCheck
+from burp import IHttpRequestResponse, IHttpService
 import re
 import unicodedata
 from os.path import exists
 from jarray import array
 from javax.swing import (GroupLayout, JPanel, JCheckBox, JTextField, JLabel, JButton)
+import json
 
 
-
-class BurpExtender(IBurpExtender, IHttpListener, ITab):
+class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExtenderCallbacks, IHttpRequestResponse):
 
 
     def debug(self, message, lvl=1):
@@ -82,6 +84,9 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         callbacks.registerHttpListener(self)
         callbacks.addSuiteTab(self)
 
+        ##!!
+        #callbacks.registerExtenderCallbacks()
+
 
     def defineCheckBox(self, caption, selected=True, enabled=True):
         checkBox = JCheckBox(caption)
@@ -99,59 +104,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
 
 
     def processHttpMessage(self, toolFlag, messageIsRequest, message):
-
-        #IScanIssue imbedded class
-        class issue(IScanIssue):
-
-            #generate a burp issue when 'issue' is called AKA when a source map or source map directive is found
-            def __init__(self, httpService, reqURL, httpMessages, issueName, issueDetail, issueSeverity, issueConfidence, remediationDetail, issueBackground, remediationBackground):
-                self._issueName = issueName
-                self._httpService = httpService
-                self._url = reqURL
-                self._httpMessages = httpMessages
-                self._issueDetail = issueDetail
-                self._severity = issueSeverity
-                self._confidence = issueConfidence
-                self._remediationDetail = remediationDetail
-                self._issueBackground = issueBackground
-                self._remediationBackground = remediationBackground
-
-                #identify the issue as an extension generated issue
-                self._issueType = int(134217728)
-                
-            
-            def getConfidence(self):
-                return self._confidence
-
-            def getHttpMessages(self):
-                return self._httpMessages
-
-            def getHttpService(self):
-                return self._httpService
-
-            def getIssueBackground(self):
-                return self._issueBackground
-
-            def getIssueDetail(self):
-                return self._issueDetail
-
-            def getIssueName(self):
-                return self._issueName
-
-            def getIssueType(self):
-                return self._issueType
-
-            def getRemediationBackground(self):
-                return self._remediationBackground
-
-            def getRemediationDetail(self):
-                return self._remediationDetail
-
-            def getSeverity(self):
-                return self._severity
-
-            def getUrl(self):
-                return self._url
 
 
         self.debug('Processing message...', 3)
@@ -196,6 +148,9 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 resourceIsCSS = True
             if re.search("\.map$", reqResource):
                 isMapResource = True
+                mapFileFound = True
+            else:
+                mapFileFound = False
 
                 
             if isTargetResource or isMapResource:
@@ -203,41 +158,53 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 resBodyStr = self._helpers.bytesToString(resBodyBytes)
                 self.debug("Res body: " + resBodyStr[:40], 3)
 
-                #find source map directive and file
-                mapFileFound = False
+                #find source map directive
                 sourceMapDirectiveFound = False
-                
+            
                 if resourceIsJS or resourceIsCSS:
                     #check whether a source map exists
                     if re.search('X-SourceMap:', resHeaderStr):
                         sourceMapDirectiveFound = True
+                        
                     if re.search('//# sourceMappingURL=', resBodyStr):
                         sourceMapDirectiveFound = True
-                    if sourceMapDirectiveFound:
-                        #if a source map directive is found, we want to generate a burp issue
-                        self.debug('Source map directive found, no need for intervention', 2)
                         
+                    if sourceMapDirectiveFound == True:
+                        #if a source map directive is found, we want to generate a burp issue
+                        self.debug('Source map directive found, no need for intervention', 1)
+
                         #add the necessary detail to generate the issue:
-                        #name the issue and describe it
+                        #name the issue and describe it -
                         issueName = 'Source Map Directive Found'
                         issueDetail = 'A source map directive has been found'
-                        
                         #identify that the issue is informative and certain
                         issueSeverity = 'Information'
                         issueConfidence = 'Certain'
                         
                         #the nature of the issue means we do not need details for its background or remediation
-                        issueBackground = None
-                        remediationDetail = None
+                        issueBackground = """Source maps allow developers to debug minified code more easily.
+                        Source maps provide a mapping from the minified client-side code, such as Javascript, back to the original source code.
+                        This finding reflects the fact that the references to the client-side code's source maps were found."""
+                        remediationDetail = """Checks should be performed to determune if the source maps are accessible,
+                        or whether they are just references and are effectively unlinked."""
                         remediationBackground = None
-                        httpMessages = None
-
-                        #generate the issue with the details outlined above
-                        #the variables httpService and reqURL are taken from earlier in the code
-                        sourcemapDirectiveIssue = issue(httpService, reqURL, httpMessages, issueName, issueDetail, issueSeverity, issueConfidence, remediationDetail, issueBackground, remediationBackground)
-                        #add issue
-                        self._callbacks.addScanIssue(sourcemapDirectiveIssue)
+                        # report the issue
+                        
+                        self._callbacks.addScanIssue(issue(
+                            message.getHttpService(),
+                            self._helpers.analyzeRequest(message).getUrl(),
+                            [message],
+                            issueName,
+                            issueDetail,
+                            issueSeverity,
+                            issueConfidence,
+                            issueBackground,
+                            remediationDetail,
+                            remediationBackground
+                        ))
+                    
                         self.debug('Burp issue raised - source map directive found', 1)
+                       
                         return
 
                     #check whether the header checkbox is selected
@@ -306,18 +273,73 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 # eventually the browser will request a map file, either because it was going to anyway or because we
                 # injected the directive, we must handle it
                 if isMapResource:
-                    self.debug('Map resource requested: ' + reqResource, 2)
+                    self.debug('Map resource requested: ' + reqResource, 1)
+                    mapFileFound = False
+
+                    #turn the header into a list to make it easier to iterate over
+                    L1 = resHeaderStr.split(' ')
+                    for i in range(len(L1)-1):
+                        listVariable = L1[i]
+                        listVariable = str(listVariable)
+                        x = re.search("Status", listVariable, re.IGNORECASE)
+
+                        if x != None:
+                            #the status of the URL will be the next list item
+                            status = L1[i+1]
+                            #we just need the number
+                            status, y = status.split('\n')
+
+                            statusCheck = False
+                            intStatus = 0
+                            mapFileFound200 = False
+                            mapFileFound304 = False
+
+                            try:
+                                intStatus = int(status)
+                                statusCheck = True
+                            except:
+                                pass
+
+                            if statusCheck == True and (intStatus == 200 or intStatus == 304):
+                                if intStatus == 200:
+                                    self.debug("Status OK - 200", 3)
+                                    try:
+                                        #load the map file
+                                        mapFile = json.loads(resBodyStr)
+
+                                        #a source map should have all of these
+                                        if ("version" in mapFile) and ("names" in mapFile) and ("mappings" in mapFile):
+                                            mapFileFound200 = True
+                                        else:
+                                            self.debug("Cannot confirm validility of source map", 1)
+
+                                    except json.JSONDecodeError:
+                                        self.debug("JSON decode error")
+  
+                                if intStatus == 304:
+                                    self.debug("Status 304 Not Modified. Source map is unable to be validated.", 3)
+                                    mapFileFound304 = True
+
+                                
+                                                                     
+
                     # check the map being downloaded looks syntactically valid before attempting to inject ours
                     if re.search('^var map = {"version"', resBodyStr):
                         self.debug('Map file start is valid, skipping', 2)
-                        #alert that a sourcemap has been found for later issue reporting in the UI
-                        mapFileFound = True
+
+
+                    #attempt to inject map file from own folders (file path as entered in mapInjectionFilesPath variable)
                     else:
                         self.debug('Requested map file not valid, attempting to inject', 2)
                         resourceFileName = str(reqResource).split('/')[-1]
                         injectableMapFile = self.mapInjectionFilesPath.text + resourceFileName
+                        self.debug(injectableMapFile)
+
+                        #if file path exists...
                         if exists(injectableMapFile):
+                            
                             self.debug('Injectable map file found at: ' + injectableMapFile, 1)
+                        
                             # load the file
                             injectableMapFileHandle = open(injectableMapFile, 'r')
                             injectableMapFileStr = injectableMapFileHandle.read()
@@ -350,41 +372,101 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                             message.setResponse(newResHeaderBytes + injectableMapFileBytes_step2)
                             self.debug('!!!Offline source map file injected!!!', 1)
                             #alert that a source map has been found
-                            mapFileFound = True
+                            
                         else:
-                            mapFileFound = False
                             self.debug('No injectable map file found (' + injectableMapFile + ' attempted)', 1)
 
-                    if mapFileFound:
-                        #if a map file has been found, we want to generate a burp issue
-                         
+                    if mapFileFound200: 
+                        #if a map file is found, we want to generate a burp issue
                         #add the necessary detail to generate the issue:
                         #name the issue and describe it -
                         issueName = 'Source Map Found'
-                        issueDetail = 'A source map has been found'
+                        issueDetail = 'A public source map has been found'
                         
                         #identify that the issue is certain and of low severity -
                         issueSeverity = 'Low'
                         issueConfidence = 'Certain'
                         
                         #the nature of the issue means we do not need details for its background or remediation
-                        issueBackground = None
-                        remediationDetail = None
+                        issueBackground = """JavaScript source maps allow developers to debug minified code more easily.
+                        Source maps provide a mapping from the minified code back to the original source code.
+                        To achieve this source map files contain details of how the source files are structured 
+                        and data on how to map from the minified versions back to the original source code.
+                        If source maps are advertised, they can be automatically detected and parsed by the development tools
+                        that are shipped with modern browsers such as Chrome or Firefox.
+                        Furthermore, tools exist which probe for the existence of Source Map files that are unlinked or are otherwise not advertised.
+                        This makes the level of technical skill required to discover and make use of them very low,
+                        and the likelihood of them being discovered, relatively high.
+                        The impact of having a source map file varies depending on the context of the application. 
+                        More often than not, the impact is low as the code is effectively already public, just not easy to read."""
+                        remediationDetail = """As part of a defence in depth approach, it may be desirable to make the process
+                        of analysing the client-side source code more difficult."""
                         remediationBackground = None
-                        httpMessages = None
-
-                        #generate the issue with the details outlined above
-                        #the variables httpService and reqURL are taken from earlier in the code
-                        sourcemapIssue = issue(httpService, reqURL, httpMessages, issueName, issueDetail, issueSeverity, issueConfidence, remediationDetail, issueBackground, remediationBackground)
-                        #add issue
-                        self._callbacks.addScanIssue(sourcemapIssue)
+                        #report the issue
+                        self._callbacks.addScanIssue(issue(
+                            message.getHttpService(),
+                            self._helpers.analyzeRequest(message).getUrl(),
+                            [message],
+                            issueName,
+                            issueDetail,
+                            issueSeverity,
+                            issueConfidence,
+                            issueBackground,
+                            remediationDetail,
+                            remediationBackground
+                        ))
                         self.debug('Burp issue raised - source map found', 1)
+                    
+                    if mapFileFound304: 
+                        #if a map file is found, we want to generate a burp issue
+                        #add the necessary detail to generate the issue:
+                        #name the issue and describe it -
+                        issueName = 'Source Map Found (cached)'
+                        issueDetail = 'A public source map has been found'
+                        
+                        #identify that the issue is certain and of low severity -
+                        issueSeverity = 'Low'
+                        issueConfidence = 'Tentative'
+                        
+                        #the nature of the issue means we do not need details for its background or remediation
+                        issueBackground = """JavaScript source maps allow developers to debug minified code more easily.
+                        Source maps provide a mapping from the minified code back to the original source code.
+                        To achieve this source map files contain details of how the source files are structured 
+                        and data on how to map from the minified versions back to the original source code.
+                        If source maps are advertised, they can be automatically detected and parsed by the development tools
+                        that are shipped with modern browsers such as Chrome or Firefox.
+                        Furthermore, tools exist which probe for the existence of Source Map files that are unlinked or are otherwise not advertised.
+                        This makes the level of technical skill required to discover and make use of them very low,
+                        and the likelihood of them being discovered, relatively high.
+                        The impact of having a source map file varies depending on the context of the application. 
+                        More often than not, the impact is low as the code is effectively already public, just not easy to read."""
+                        remediationDetail = """As part of a defence in depth approach, it may be desirable to make the process
+                        of analysing the client-side source code more difficult."""
+                        remediationBackground = None
+                        #report the issue
+                        self._callbacks.addScanIssue(issue(
+                            message.getHttpService(),
+                            self._helpers.analyzeRequest(message).getUrl(),
+                            [message],
+                            issueName,
+                            issueDetail,
+                            issueSeverity,
+                            issueConfidence,
+                            issueBackground,
+                            remediationDetail,
+                            remediationBackground
+                        ))
+                        self.debug('Burp issue raised - source map found (cached)', 1)
+                
                 else:
                     self.debug('Request is not for a target resource or it\'s a map', 3)
 
         # end of function - return!
         return
+    
 
+
+        
     def detectStringEncoding(self, string):
         codecs = ['ASCII', 'UTF-8', 'cp1252', 'latin-1', 'ISO 8859-1', 'ISO 8859-15', 'GBK', 'JIS', 'UCS-2', 'UCS-4', 'UTF-16', 'UTF-32', 'UTF-42']
         for i in codecs:
@@ -397,3 +479,59 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 
     def extensionUnloaded(self):
         self.debug('Unloading extension...')
+
+#class httpRequest()
+
+#IScanIssue imbedded class
+class issue(IScanIssue):
+
+    #generate a burp issue when 'issue' is called AKA when a source map or source map directive is found
+    def __init__(self, httpService, reqURL, httpMessages, issueName, issueDetail, issueSeverity, issueConfidence, issueBackground, remediationDetail, remediationBackground):
+        self._issueName = issueName
+        self._httpService = httpService
+        self._url = reqURL
+        self._httpMessages = httpMessages
+        self._issueDetail = issueDetail
+        self._issueBackground = issueBackground
+        self._severity = issueSeverity
+        self._confidence = issueConfidence
+        self._remediationDetail = remediationDetail
+        self._remediationBackground = remediationBackground
+
+        #identify the issue as an extension generated issue
+        self._issueType = int(134217728)
+        
+    
+    def getConfidence(self):
+        return self._confidence
+
+    def getHttpMessages(self):
+        return self._httpMessages
+
+    def getHttpService(self):
+        return self._httpService
+
+    def getIssueBackground(self):
+        return self._issueBackground
+
+    def getIssueDetail(self):
+        return self._issueDetail
+
+    def getIssueName(self):
+        return self._issueName
+    
+    def getIssueType(self):
+        return self._issueType
+
+    def getRemediationBackground(self):
+        return self._remediationBackground
+
+    def getRemediationDetail(self):
+        return self._remediationDetail
+
+    def getSeverity(self):
+        return self._severity
+
+    def getUrl(self):
+        return self._url
+
