@@ -12,12 +12,7 @@ from javax.swing import (GroupLayout, JPanel, JCheckBox, JTextField, JLabel, JBu
 import json
 
 
-
-
-
-
 class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExtenderCallbacks, IHttpRequestResponse, IScanIssue):
-
 
 
     def debug(self, message, lvl=1):
@@ -106,9 +101,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
 
 
     def processHttpMessage(self, toolFlag, messageIsRequest, message):
-
-
-
 
         self.debug('Processing message...', 3)
         # we only process the responses (and get the bits of the request we need when they are responded to)
@@ -329,7 +321,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                                     mapFileFound304 = True
 
                                 
-                                                                     
+                                                                    
 
                     # check the map being downloaded looks syntactically valid before attempting to inject ours
                     if re.search('^var map = {"version"', resBodyStr):
