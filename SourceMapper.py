@@ -275,6 +275,8 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                 if isMapResource:
                     self.debug('Map resource requested: ' + reqResource, 1)
                     mapFileFound = False
+                    mapFileFound200 = False
+                    mapFileFound304 = False
 
                     #turn the header into a list to make it easier to iterate over
                     L1 = resHeaderStr.split(' ')
@@ -291,8 +293,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
 
                             statusCheck = False
                             intStatus = 0
-                            mapFileFound200 = False
-                            mapFileFound304 = False
 
                             try:
                                 intStatus = int(status)
@@ -320,9 +320,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                                     self.debug("Status 304 Not Modified. Source map is unable to be validated.", 3)
                                     mapFileFound304 = True
 
-                                
-                                                                    
-
+                    
                     # check the map being downloaded looks syntactically valid before attempting to inject ours
                     if re.search('^var map = {"version"', resBodyStr):
                         self.debug('Map file start is valid, skipping', 2)
