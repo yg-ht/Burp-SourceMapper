@@ -12,7 +12,7 @@ from javax.swing import (GroupLayout, JPanel, JCheckBox, JTextField, JLabel, JBu
 import json
 
 
-class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExtenderCallbacks, IHttpRequestResponse):
+class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExtenderCallbacks, IHttpRequestResponse, IScanIssue):
 
 
     def debug(self, message, lvl=1):
@@ -84,9 +84,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
         callbacks.registerHttpListener(self)
         callbacks.addSuiteTab(self)
 
-        ##!!
-        #callbacks.registerExtenderCallbacks()
-
 
     def defineCheckBox(self, caption, selected=True, enabled=True):
         checkBox = JCheckBox(caption)
@@ -104,7 +101,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
 
 
     def processHttpMessage(self, toolFlag, messageIsRequest, message):
-
 
         self.debug('Processing message...', 3)
         # we only process the responses (and get the bits of the request we need when they are responded to)
@@ -188,22 +184,26 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                         remediationDetail = """Checks should be performed to determune if the source maps are accessible,
                         or whether they are just references and are effectively unlinked."""
                         remediationBackground = None
-                        # report the issue
-                        
-                        self._callbacks.addScanIssue(issue(
-                            message.getHttpService(),
-                            self._helpers.analyzeRequest(message).getUrl(),
-                            [message],
-                            issueName,
-                            issueDetail,
-                            issueSeverity,
-                            issueConfidence,
-                            issueBackground,
-                            remediationDetail,
-                            remediationBackground
-                        ))
-                    
-                        self.debug('Burp issue raised - source map directive found', 1)
+                        issueURL = self._helpers.analyzeRequest(message).getUrl()
+                        self.debug(issueURL)
+
+                        if self.issueDuplication(issueName, issueURL) == True:
+                            #report the issue
+                            self._callbacks.addScanIssue(issue(
+                                message.getHttpService(),
+                                issueURL,
+                                [message],
+                                issueName,
+                                issueDetail,
+                                issueSeverity,
+                                issueConfidence,
+                                issueBackground,
+                                remediationDetail,
+                                remediationBackground
+                            ))
+                            self.debug('Burp issue raised - source map directive found: ' + str(issueURL), 1)
+                        else:
+                            self.debug('Issue already raised for this URL: ' + str(issueURL))
                        
                         return
 
@@ -321,7 +321,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                                     mapFileFound304 = True
 
                                 
-                                                                     
+                                                                    
 
                     # check the map being downloaded looks syntactically valid before attempting to inject ours
                     if re.search('^var map = {"version"', resBodyStr):
@@ -402,20 +402,27 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                         remediationDetail = """As part of a defence in depth approach, it may be desirable to make the process
                         of analysing the client-side source code more difficult."""
                         remediationBackground = None
-                        #report the issue
-                        self._callbacks.addScanIssue(issue(
-                            message.getHttpService(),
-                            self._helpers.analyzeRequest(message).getUrl(),
-                            [message],
-                            issueName,
-                            issueDetail,
-                            issueSeverity,
-                            issueConfidence,
-                            issueBackground,
-                            remediationDetail,
-                            remediationBackground
-                        ))
-                        self.debug('Burp issue raised - source map found', 1)
+                        issueURL = self._helpers.analyzeRequest(message).getUrl()
+                        self.debug(issueURL)
+
+                        if self.issueDuplication(issueName, issueURL) == True:
+                            #report the issue
+                            self._callbacks.addScanIssue(issue(
+                                message.getHttpService(),
+                                issueURL,
+                                [message],
+                                issueName,
+                                issueDetail,
+                                issueSeverity,
+                                issueConfidence,
+                                issueBackground,
+                                remediationDetail,
+                                remediationBackground
+                            ))
+                            self.debug('Burp issue raised - source map found: ' + str(issueURL), 1)
+                        else:
+                            self.debug('Issue already raised for this URL: ' + str(issueURL))
+
                     
                     if mapFileFound304: 
                         #if a map file is found, we want to generate a burp issue
@@ -443,20 +450,26 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                         remediationDetail = """As part of a defence in depth approach, it may be desirable to make the process
                         of analysing the client-side source code more difficult."""
                         remediationBackground = None
-                        #report the issue
-                        self._callbacks.addScanIssue(issue(
-                            message.getHttpService(),
-                            self._helpers.analyzeRequest(message).getUrl(),
-                            [message],
-                            issueName,
-                            issueDetail,
-                            issueSeverity,
-                            issueConfidence,
-                            issueBackground,
-                            remediationDetail,
-                            remediationBackground
-                        ))
-                        self.debug('Burp issue raised - source map found (cached)', 1)
+                        issueURL = self._helpers.analyzeRequest(message).getUrl()
+                        self.debug(issueURL)
+
+                        if self.issueDuplication(issueName, issueURL) == True:
+                            #report the issue
+                            self._callbacks.addScanIssue(issue(
+                                message.getHttpService(),
+                                issueURL,
+                                [message],
+                                issueName,
+                                issueDetail,
+                                issueSeverity,
+                                issueConfidence,
+                                issueBackground,
+                                remediationDetail,
+                                remediationBackground
+                            ))
+                            self.debug('Burp issue raised - source map found (cached): ' + str(issueURL), 1)
+                        else:
+                            self.debug('Issue already raised for this URL: ' + str(issueURL))
                 
                 else:
                     self.debug('Request is not for a target resource or it\'s a map', 3)
@@ -464,8 +477,33 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
         # end of function - return!
         return
     
+    def issueDuplication(self, newIssueName, newIssueURL):
+        issues = self._callbacks.getScanIssues("")
+        issueData = {}
+        for issue in issues:
+            issueName = issue.getIssueName()
+            issueURL = issue.getUrl()
+            issueNameUp = str(issueName) + str(issueURL)
+            issueData.update({str(issueNameUp): str(issueURL)})
 
+        newIssue = True
+        
+        url = str(newIssueURL)
+        protocol, urlNoProtocol = str(url).split('://')
+        host, urlNoHost = str(urlNoProtocol).split(':')
+        port, path = str(urlNoHost).split('/', 1)
+        urlNoPort = protocol + '://' + host + '/' + path
 
+        newIssueNameUp = newIssueName + urlNoPort
+    
+        #newissuename needs to have url on end to match with dictionary
+        if str(newIssueNameUp) in issueData:
+            key = issueData[newIssueNameUp]
+            if key == str(urlNoPort):
+                newIssue = False
+        return newIssue
+
+        
         
     def detectStringEncoding(self, string):
         codecs = ['ASCII', 'UTF-8', 'cp1252', 'latin-1', 'ISO 8859-1', 'ISO 8859-15', 'GBK', 'JIS', 'UCS-2', 'UCS-4', 'UTF-16', 'UTF-32', 'UTF-42']
@@ -480,7 +518,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
     def extensionUnloaded(self):
         self.debug('Unloading extension...')
 
-#class httpRequest()
 
 #IScanIssue imbedded class
 class issue(IScanIssue):
@@ -500,6 +537,7 @@ class issue(IScanIssue):
 
         #identify the issue as an extension generated issue
         self._issueType = int(134217728)
+
         
     
     def getConfidence(self):
