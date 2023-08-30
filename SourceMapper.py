@@ -295,6 +295,10 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                             #we just need the number
                             status, y = status.split('\n')
 
+
+                            statusCheck = False
+                            intStatus = 0
+
                             try:
                                 intStatus = int(status)
                                 statusCheck = True
@@ -333,8 +337,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                         if statusCheck == False:
                             self.debug("Status not found", 3)
 
-                                
-                                                                    
+
                     # check the map being downloaded looks syntactically valid before attempting to inject ours
                     if re.search('^var map = {"version"', resBodyStr):
                         self.debug('Map file start is valid, skipping', 2)
