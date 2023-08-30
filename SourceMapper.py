@@ -102,6 +102,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
 
     def processHttpMessage(self, toolFlag, messageIsRequest, message):
 
+
         self.debug('Processing message...', 3)
         # we only process the responses (and get the bits of the request we need when they are responded to)
         if messageIsRequest:
@@ -274,9 +275,10 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                 # injected the directive, we must handle it
                 if isMapResource:
                     self.debug('Map resource requested: ' + reqResource, 1)
-                    mapFileFound = False
                     mapFileFound200 = False
                     mapFileFound304 = False
+                    statusCheck = False
+                    intStatus = 0
 
                     #turn the header into a list to make it easier to iterate over
                     L1 = resHeaderStr.split(' ')
@@ -284,12 +286,15 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                         listVariable = L1[i]
                         listVariable = str(listVariable)
                         x = re.search("Status", listVariable, re.IGNORECASE)
+                        StatusOK = re.search("200 OK", resHeaderStr, re.IGNORECASE)
+                        StatusNotModified = re.search("304 Not Modified", resHeaderStr, re.IGNORECASE)
 
                         if x != None:
                             #the status of the URL will be the next list item
                             status = L1[i+1]
                             #we just need the number
                             status, y = status.split('\n')
+
 
                             statusCheck = False
                             intStatus = 0
@@ -299,28 +304,40 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                                 statusCheck = True
                             except:
                                 pass
+                        
+                        if StatusOK != None:
+                            intStatus = 200
+                            statusCheck = True
 
-                            if statusCheck == True and (intStatus == 200 or intStatus == 304):
-                                if intStatus == 200:
-                                    self.debug("Status OK - 200", 3)
-                                    try:
-                                        #load the map file
-                                        mapFile = json.loads(resBodyStr)
+                        if StatusNotModified != None:
+                            intStatus = 304
+                            statusCheck = True
 
-                                        #a source map should have all of these
-                                        if ("version" in mapFile) and ("names" in mapFile) and ("mappings" in mapFile):
-                                            mapFileFound200 = True
-                                        else:
-                                            self.debug("Cannot confirm validility of source map", 1)
+                        if statusCheck == True and (intStatus == 200 or intStatus == 304):
+                            if intStatus == 200:
+                                self.debug("Status OK - 200", 3)
+                                try:
+                                    #load the map file
+                                    mapFile = json.loads(resBodyStr)
 
-                                    except json.JSONDecodeError:
-                                        self.debug("JSON decode error")
-  
-                                if intStatus == 304:
-                                    self.debug("Status 304 Not Modified. Source map is unable to be validated.", 3)
-                                    mapFileFound304 = True
+                                    #a source map should have all of these
+                                    if ("version" in mapFile) and ("names" in mapFile) and ("mappings" in mapFile):
+                                        mapFileFound200 = True
+                                    else:
+                                        self.debug("Cannot confirm validility of source map", 1)
+                                        invalid200 = True
 
-                    
+                                except json.JSONDecodeError:
+                                    self.debug("JSON decode error")
+                                    invalid200 = True
+
+                            if intStatus == 304:
+                                self.debug("Status 304 Not Modified. Source map is unable to be validated.", 3)
+                                mapFileFound304 = True
+                        if statusCheck == False:
+                            self.debug("Status not found", 3)
+
+
                     # check the map being downloaded looks syntactically valid before attempting to inject ours
                     if re.search('^var map = {"version"', resBodyStr):
                         self.debug('Map file start is valid, skipping', 2)
@@ -421,6 +438,40 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                         else:
                             self.debug('Issue already raised for this URL: ' + str(issueURL))
 
+                    if invalid200: 
+        
+                        issueName = 'Map file flagged as invalid'
+                        issueDetail = 'A map file appears to be syntactically incorrect'
+                        
+                        #identify that the issue is certain and of low severity -
+                        issueSeverity = 'Low'
+                        issueConfidence = 'Certain'
+                        
+                        #the nature of the issue means we do not need details for its background or remediation
+                        issueBackground = """A map file with a HTTP 200 response has been found,
+                        but appears to be syntactically incorrect."""
+                        remediationDetail = None
+                        remediationBackground = None
+                        issueURL = self._helpers.analyzeRequest(message).getUrl()
+                        self.debug(issueURL)
+
+                        if self.issueDuplication(issueName, issueURL) == True:
+                            #report the issue
+                            self._callbacks.addScanIssue(issue(
+                                message.getHttpService(),
+                                issueURL,
+                                [message],
+                                issueName,
+                                issueDetail,
+                                issueSeverity,
+                                issueConfidence,
+                                issueBackground,
+                                remediationDetail,
+                                remediationBackground
+                            ))
+                            self.debug('Burp issue raised - map file syntactically incorrect ' + str(issueURL), 1)
+                        else:
+                            self.debug('Issue already raised for this URL: ' + str(issueURL))
                     
                     if mapFileFound304: 
                         #if a map file is found, we want to generate a burp issue
@@ -483,7 +534,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
             issueURL = issue.getUrl()
             issueNameUp = str(issueName) + str(issueURL)
             issueData.update({str(issueNameUp): str(issueURL)})
-
         newIssue = True
         
         url = str(newIssueURL)
@@ -570,4 +620,3 @@ class issue(IScanIssue):
 
     def getUrl(self):
         return self._url
-
