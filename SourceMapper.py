@@ -81,13 +81,17 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
         )
 
 
+
         # start "doing" things for real
         self.debug('Loading extension...')
-
+        
         callbacks.setExtensionName('SourceMapper')
         callbacks.registerHttpListener(self)
         callbacks.addSuiteTab(self)
         callbacks.registerScannerCheck(self)
+
+        global issueDict
+        issueDict = {}
 
 
     def defineCheckBox(self, caption, selected=True, enabled=True):
@@ -107,6 +111,15 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
 
     def processHttpMessage(self, toolFlag, messageIsRequest, message):
 
+        global intStatus
+        global sourceMapDirectiveFound
+        global embeddedSourceMapDirectiveFound
+        global invalid200
+    
+        intStatus = None
+        sourceMapDirectiveFound = None
+        embeddedSourceMapDirectiveFound = None
+        invalid200 = None
 
         self.debug('Processing message...', 3)
         # we only process the responses (and get the bits of the request we need when they are responded to)
@@ -122,15 +135,12 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
         # check if the requested resource is within permitted scope
         if self.onlyInScope.isSelected() and not self._callbacks.isInScope(reqURL):
             self.debug('Not in-scope and only in-scope permitted', 2)
-            return
+            return 
         else:
             # ignore any query string parameters
             reqResource = str(reqURL).split('?')[0]
             self.debug('Resource in full: ' + reqResource, 3)
-            return
 
-    def sourcemap(self, message, reqResource):
-            
         # if the resource requested is either a JS file or a CSS file then mark it for processing
         isTargetResource = False
         isMapResource = False
@@ -169,14 +179,16 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                 #check whether a source map exists
                 if re.search('X-SourceMap:', resHeaderStr):
                     sourceMapDirectiveFound = True
-                    return "directive"
+                    issueDict.update({str(reqURL): "directive"})
+                    
                     
                 elif re.search('//# sourceMappingURL=', resBodyStr):
                     embeddedSourceMapDirectiveFound = True
-                    return "embedded"
+                    issueDict.update({str(reqURL): "embedded"})
+                    
                 
                 else:
-                    self.debug("No sourcemap directive found")
+                    self.debug("No sourcemap directive found", 2)
 
                 #check whether the header checkbox is selected
                 #if so inject sourcemap into header
@@ -245,8 +257,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
             # injected the directive, we must handle it
             if isMapResource:
                 self.debug('Map resource requested: ' + reqResource, 1)
-                mapFileFound200 = False
-                mapFileFound304 = False
                 invalid200 = False
                 statusCheck = False
                 intStatus = 0
@@ -289,18 +299,22 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
 
                                 #a source map should have all of these
                                 if ("version" in mapFile) and ("names" in mapFile) and ("mappings" in mapFile):
-                                    mapFileFound200 = True
+                                    intStatus = 200
+                                    issueDict.update({str(reqURL): "200"})
                                 else:
                                     self.debug("Cannot confirm validility of source map", 1)
                                     invalid200 = True
+                                    issueDict.update({str(reqURL): "invalid"})
 
                             except json.JSONDecodeError:
                                 self.debug("JSON decode error")
                                 invalid200 = True
+                                issueDict.update({str(reqURL): "invalid"})
 
                         if intStatus == 304:
                             self.debug("Status 304 Not Modified. Source map is unable to be validated.", 3)
-                            mapFileFound304 = True
+                            issueDict.update({str(reqURL): "304"})
+
                     if statusCheck == False:
                         self.debug("Status not found", 3)
 
@@ -358,169 +372,137 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
                         
                     else:
                         self.debug('No injectable map file found (' + injectableMapFile + ' attempted)', 1)
-
-                if mapFileFound200:
-                    return "200"
-
-                if invalid200: 
-                    return "invalid"
-
-                if mapFileFound304:
-                    return "304"
             
             else:
                 self.debug('Request is not for a target resource or it\'s a map', 3)
         
         # end of function - return!
         return None
-    
 
     def doPassiveScan(self, baseRequestResponse):
-
         httpService = baseRequestResponse.getHttpService()
         request = self._helpers.analyzeRequest(httpService, baseRequestResponse.getRequest())
         reqURL = request.getUrl()
-        reqResource = str(reqURL).split('?')[0]
 
-        if self.sourcemap(baseRequestResponse, reqResource) == "directive":
-            self.debug('Source map directive found, no need for intervention', 1)
-            
-            issueName = 'Source Map Directive Found'
-            issueDetail = 'A source map directive has been found'
-            issueSeverity = 'Information'
-            issueConfidence = 'Certain'
-            issueBackground = """Source maps allow developers to debug minified code more easily.
-            Source maps provide a mapping from the minified client-side code, such as Javascript, back to the original source code.
-            This finding reflects the fact that the references to the client-side code's source maps were found."""
-            remediationDetail = """Checks should be performed to determune if the source maps are accessible,
-            or whether they are just references and are effectively unlinked."""
-            remediationBackground = None
-            issueURL = self._helpers.analyzeRequest(baseRequestResponse).getUrl()
-
-            self.debug('Burp issue raised - source map directive found: ' + str(issueURL), 1)
-        
-        elif self.sourcemap(baseRequestResponse, reqResource) == "embedded":
-            issueName = ' Embedded Source Map Directive Found'
-            issueDetail = 'An embedded source map directive has been found'
-            issueSeverity = 'Information'
-            issueConfidence = 'Certain'
-            issueBackground = """Source maps allow developers to debug minified code more easily.
-            Source maps provide a mapping from the minified client-side code, such as Javascript, back to the original source code.
-            This finding reflects the fact that the references to the client-side code's source maps were found."""
-            remediationDetail = """Checks should be performed to determune if the source maps are accessible,
-            or whether they are just references and are effectively unlinked."""
-            remediationBackground = None
-            issueURL = self._helpers.analyzeRequest(baseRequestResponse).getUrl()
-
-            self.debug('Burp issue raised - embedded source map found: ' + str(issueURL), 1)
-        
-        elif self.sourcemap(baseRequestResponse, reqResource) == "200":
-            issueName = 'Source Map Found'
-            issueDetail = 'A public source map has been found'
-            issueSeverity = 'Low'
-            issueConfidence = 'Certain'
-            issueBackground = """JavaScript source maps allow developers to debug minified code more easily.
-            Source maps provide a mapping from the minified code back to the original source code.
-            To achieve this source map files contain details of how the source files are structured 
-            and data on how to map from the minified versions back to the original source code.
-            If source maps are advertised, they can be automatically detected and parsed by the development tools
-            that are shipped with modern browsers such as Chrome or Firefox.
-            Furthermore, tools exist which probe for the existence of Source Map files that are unlinked or are otherwise not advertised.
-            This makes the level of technical skill required to discover and make use of them very low,
-            and the likelihood of them being discovered, relatively high.
-            The impact of having a source map file varies depending on the context of the application. 
-            More often than not, the impact is low as the code is effectively already public, just not easy to read."""
-            remediationDetail = """As part of a defence in depth approach, it may be desirable to make the process
-            of analysing the client-side source code more difficult."""
-            remediationBackground = None
-            issueURL = self._helpers.analyzeRequest(baseRequestResponse).getUrl()
-            
-            self.debug('Burp issue raised - source map found: ' + str(issueURL), 1)
-        
-        elif self.sourcemap(baseRequestResponse, reqResource) == "invalid":
-            issueName = 'Map file flagged as invalid'
-            issueDetail = 'A map file appears to be syntactically incorrect'
-            issueSeverity = 'Low'
-            issueConfidence = 'Certain'
-            issueBackground = """A map file with a HTTP 200 response has been found,
-            but appears to be syntactically incorrect."""
-            remediationDetail = None
-            remediationBackground = None
-            issueURL = self._helpers.analyzeRequest(baseRequestResponse).getUrl()
-            
-            self.debug('Burp issue raised - map file syntactically incorrect ' + str(issueURL), 1)
-        
-        elif self.sourcemap(baseRequestResponse, reqResource) == "304":
-            issueName = 'Source Map Found (cached)'
-            issueDetail = 'A public source map has been found'
-            issueSeverity = 'Low'
-            issueConfidence = 'Tentative'
-            issueBackground = """JavaScript source maps allow developers to debug minified code more easily.
-            Source maps provide a mapping from the minified code back to the original source code.
-            To achieve this source map files contain details of how the source files are structured 
-            and data on how to map from the minified versions back to the original source code.
-            If source maps are advertised, they can be automatically detected and parsed by the development tools
-            that are shipped with modern browsers such as Chrome or Firefox.
-            Furthermore, tools exist which probe for the existence of Source Map files that are unlinked or are otherwise not advertised.
-            This makes the level of technical skill required to discover and make use of them very low,
-            and the likelihood of them being discovered, relatively high.
-            The impact of having a source map file varies depending on the context of the application. 
-            More often than not, the impact is low as the code is effectively already public, just not easy to read."""
-            remediationDetail = """As part of a defence in depth approach, it may be desirable to make the process
-            of analysing the client-side source code more difficult."""
-            remediationBackground = None
-            issueURL = self._helpers.analyzeRequest(baseRequestResponse).getUrl()
-            
-            self.debug('Burp issue raised - source map found (cached): ' + str(issueURL), 1)
-
-        else:
+        if len(issueDict) == 0:
+            self.debug("No issues", 3)
             return None
+        
+        if str(reqURL) in issueDict:
+       
+            if issueDict[str(reqURL)] == "directive":
+                self.debug('Source map directive found, no need for intervention', 1)
+                
+                issueName = 'Source Map Directive Found'
+                issueDetail = 'A source map directive has been found'
+                issueSeverity = 'Information'
+                issueConfidence = 'Certain'
+                issueBackground = """Source maps allow developers to debug minified code more easily.
+                Source maps provide a mapping from the minified client-side code, such as Javascript, back to the original source code.
+                This finding reflects the fact that the references to the client-side code's source maps were found."""
+                remediationDetail = """Checks should be performed to determune if the source maps are accessible,
+                or whether they are just references and are effectively unlinked."""
+                remediationBackground = None
+                issueURL = self._helpers.analyzeRequest(baseRequestResponse).getUrl()
 
-        if self.issueDuplication(issueName, issueURL) == True:
-            return[issue(
-                httpService,
-                issueURL,
-                [baseRequestResponse],
-                issueName,
-                issueDetail,
-                issueSeverity,
-                issueConfidence,
-                issueBackground,
-                remediationDetail,
-                remediationBackground
+                self.debug('Burp issue queued to be raised - source map directive found: ' + str(issueURL), 2)
+            
+            elif issueDict[str(reqURL)] == "embedded":
+                issueName = ' Embedded Source Map Directive Found'
+                issueDetail = 'An embedded source map directive has been found'
+                issueSeverity = 'Information'
+                issueConfidence = 'Certain'
+                issueBackground = """Source maps allow developers to debug minified code more easily.
+                Source maps provide a mapping from the minified client-side code, such as Javascript, back to the original source code.
+                This finding reflects the fact that the references to the client-side code's source maps were found."""
+                remediationDetail = """Checks should be performed to determune if the source maps are accessible,
+                or whether they are just references and are effectively unlinked."""
+                remediationBackground = None
+                issueURL = self._helpers.analyzeRequest(baseRequestResponse).getUrl()
+
+                self.debug('Burp issue queued to be raised - embedded source map found: ' + str(issueURL), 2)
+            
+            elif issueDict[str(reqURL)] == "200":
+                issueName = 'Source Map Found'
+                issueDetail = 'A public source map has been found'
+                issueSeverity = 'Low'
+                issueConfidence = 'Certain'
+                issueBackground = """JavaScript source maps allow developers to debug minified code more easily.
+                Source maps provide a mapping from the minified code back to the original source code.
+                To achieve this source map files contain details of how the source files are structured 
+                and data on how to map from the minified versions back to the original source code.
+                If source maps are advertised, they can be automatically detected and parsed by the development tools
+                that are shipped with modern browsers such as Chrome or Firefox.
+                Furthermore, tools exist which probe for the existence of Source Map files that are unlinked or are otherwise not advertised.
+                This makes the level of technical skill required to discover and make use of them very low,
+                and the likelihood of them being discovered, relatively high.
+                The impact of having a source map file varies depending on the context of the application. 
+                More often than not, the impact is low as the code is effectively already public, just not easy to read."""
+                remediationDetail = """As part of a defence in depth approach, it may be desirable to make the process
+                of analysing the client-side source code more difficult."""
+                remediationBackground = None
+                issueURL = self._helpers.analyzeRequest(baseRequestResponse).getUrl()
+                
+                self.debug('Burp issue queued to be raised - source map found: ' + str(issueURL), 2)
+            
+            elif issueDict[str(reqURL)] == "invalid":
+                issueName = 'Map file flagged as invalid'
+                issueDetail = 'A map file appears to be syntactically incorrect'
+                issueSeverity = 'Low'
+                issueConfidence = 'Certain'
+                issueBackground = """A map file with a HTTP 200 response has been found,
+                but appears to be syntactically incorrect."""
+                remediationDetail = None
+                remediationBackground = None
+                issueURL = self._helpers.analyzeRequest(baseRequestResponse).getUrl()
+                
+                self.debug('Burp issue queued to be raised - map file syntactically incorrect ' + str(issueURL), 2)
+            
+            elif issueDict[str(reqURL)] == "304":
+                issueName = 'Source Map Found (cached)'
+                issueDetail = 'A public source map has been found'
+                issueSeverity = 'Low'
+                issueConfidence = 'Tentative'
+                issueBackground = """JavaScript source maps allow developers to debug minified code more easily.
+                Source maps provide a mapping from the minified code back to the original source code.
+                To achieve this source map files contain details of how the source files are structured 
+                and data on how to map from the minified versions back to the original source code.
+                If source maps are advertised, they can be automatically detected and parsed by the development tools
+                that are shipped with modern browsers such as Chrome or Firefox.
+                Furthermore, tools exist which probe for the existence of Source Map files that are unlinked or are otherwise not advertised.
+                This makes the level of technical skill required to discover and make use of them very low,
+                and the likelihood of them being discovered, relatively high.
+                The impact of having a source map file varies depending on the context of the application. 
+                More often than not, the impact is low as the code is effectively already public, just not easy to read."""
+                remediationDetail = """As part of a defence in depth approach, it may be desirable to make the process
+                of analysing the client-side source code more difficult."""
+                remediationBackground = None
+                issueURL = self._helpers.analyzeRequest(baseRequestResponse).getUrl()
+                
+                self.debug('Burp issue queued to be raised - source map found (cached): ' + str(issueURL), 2)
+
+            else:
+                self.debug("No issues", 3)
+                return None
+        else:
+            self.debug("No issues", 3)
+            return None
+        
+        return[issue(
+            httpService,
+            issueURL,
+            [baseRequestResponse],
+            issueName,
+            issueDetail,
+            issueSeverity,
+            issueConfidence,
+            issueBackground,
+            remediationDetail,
+            remediationBackground
             )]
-        else:
-            self.debug('Issue already raised for this URL: ' + str(issueURL))
-            return None
 
-    
-    def issueDuplication(self, NewIssueName, newIssueURL):
-        if NewIssueName != None:
-            issues = self._callbacks.getScanIssues("")
-            issueData = {}
-            for issue in issues:
-                issueName = issue.getIssueName()
-                issueURL = issue.getUrl()
-                issueNameUp = str(issueName) + str(issueURL)
-                issueData.update({str(issueNameUp): str(issueURL)})
-            newIssue = True
-        
-            url = str(newIssueURL)
-            protocol, urlNoProtocol = str(url).split('://')
-            host, urlNoHost = str(urlNoProtocol).split(':')
-            port, path = str(urlNoHost).split('/', 1)
-            urlNoPort = protocol + '://' + host + '/' + path
-
-            newIssueNameUp = NewIssueName + urlNoPort
-        
-            #newissuename needs to have url on end to match with dictionary
-            if str(newIssueNameUp) in issueData:
-                key = issueData[newIssueNameUp]
-                if key == str(urlNoPort):
-                    newIssue = False
-            return newIssue
-
-        
+    def doActiveScan():
+        return None      
         
     def detectStringEncoding(self, string):
         codecs = ['ASCII', 'UTF-8', 'cp1252', 'latin-1', 'ISO 8859-1', 'ISO 8859-15', 'GBK', 'JIS', 'UCS-2', 'UCS-4', 'UTF-16', 'UTF-32', 'UTF-42']
@@ -534,8 +516,9 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
     
     def consolidateDuplicateIssues(self, existingIssue, newIssue):
         if existingIssue.getIssueName() == newIssue.getIssueName():
+            self.debug("Issue already raised for this URL", 2)
             return -1
-
+        self.debug("Extension generated burp issue raised", 1)
         return 0
                 
     def extensionUnloaded(self):
