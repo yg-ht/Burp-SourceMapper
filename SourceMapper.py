@@ -520,6 +520,9 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IScannerCheck, IBurpExten
             return -1
         self.debug("Extension generated burp issue raised", 1)
         return 0
+
+    def doActiveScan(self, baseRequestResponse insertionPoint):
+        return None
                 
     def extensionUnloaded(self):
         self.debug('Unloading extension...')
